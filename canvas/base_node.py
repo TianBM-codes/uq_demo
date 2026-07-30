@@ -11,6 +11,7 @@ class Port(QGraphicsItem):
         self.name = name
         self.radius = 6
         self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     def boundingRect(self):
         return QRectF(-self.radius, -self.radius, self.radius * 2, self.radius * 2)

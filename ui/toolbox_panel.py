@@ -15,6 +15,17 @@ from PySide6.QtWidgets import (
 
 LIBRARY_SECTIONS = [
     {
+        "key": "cross_stage",
+        "title": "跨阶段设置",
+        "color": "#0F766E",
+        "description": "单独配置设计到制造、制造到试验、试验到服役之间的参数传递与结果继承。",
+        "items": [
+            "设计 -> 制造 传递设置",
+            "制造 -> 试验 传递设置",
+            "试验 -> 服役 传递设置",
+        ],
+    },
+    {
         "key": "functional",
         "title": "功能性模型",
         "color": "#2563EB",
@@ -32,7 +43,7 @@ LIBRARY_SECTIONS = [
         "key": "propagation",
         "title": "不确定性传播模型",
         "color": "#D97706",
-        "description": "突出参数如何注入、如何传播、如何形成跨阶段响应。",
+        "description": "突出参数如何注入、如何传播、如何形成当前阶段内部响应。",
         "items": [
             "概率传播模型",
             "区间传播模型",
@@ -111,7 +122,7 @@ class ToolboxPanel(QWidget):
         title.setFont(QFont("Microsoft YaHei", 17, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        subtitle = QLabel("左侧按业务语义组织模块。点击模块可在中央高亮链路，并在右侧查看算法与参数配置。")
+        subtitle = QLabel("中央只处理当前阶段内部流程。跨阶段传递单独放在左侧设置。")
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color: #52606D; font-size: 13px; line-height: 1.45;")
         layout.addWidget(subtitle)
@@ -188,13 +199,13 @@ class ToolboxPanel(QWidget):
         helper_layout.setContentsMargins(14, 18, 14, 14)
         helper_layout.setSpacing(12)
 
-        reset_btn = QPushButton("恢复默认链路")
+        reset_btn = QPushButton("恢复默认流程")
         reset_btn.setMinimumHeight(46)
         reset_btn.setStyleSheet(self._button_style("#0F766E", accent=True))
         reset_btn.clicked.connect(self.reset_requested.emit)
         helper_layout.addWidget(reset_btn)
 
-        note = QLabel("建议汇报顺序：先看参数注入，再看传播模型，再落到可靠性分析与模型修正闭环。")
+        note = QLabel("建议汇报顺序：先看当前阶段内部四步流程，再单独解释跨阶段设置。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #52606D; font-size: 12px;")
         helper_layout.addWidget(note)
@@ -258,7 +269,7 @@ class DraggableToolButton(QPushButton):
             return super().mouseMoveEvent(event)
         if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
             return super().mouseMoveEvent(event)
-        if not self.payload:
+        if not self.payload or self.payload["section"] == "cross_stage":
             return super().mouseMoveEvent(event)
 
         drag = QDrag(self)

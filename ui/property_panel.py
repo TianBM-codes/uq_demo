@@ -4,7 +4,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -15,7 +14,6 @@ class PropertyPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(390)
-        self._algo_buttons = []
         self._setup_ui()
 
     def _setup_ui(self):
@@ -62,13 +60,13 @@ class PropertyPanel(QWidget):
         title.setFont(QFont("Microsoft YaHei", 17, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        self.selection_card = QGroupBox("当前模块")
+        self.selection_card = QGroupBox("当前对象")
         card_layout = QVBoxLayout(self.selection_card)
         card_layout.setContentsMargins(14, 18, 14, 14)
         card_layout.setSpacing(8)
-        self.name_label = QLabel("未选择模块")
+        self.name_label = QLabel("未选择对象")
         self.name_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        self.path_label = QLabel("点击左侧模块或中央链路节点查看配置。")
+        self.path_label = QLabel("点击左侧模块、跨阶段设置项，或中央流程节点查看配置。")
         self.path_label.setWordWrap(True)
         self.path_label.setStyleSheet("color: #52606D; font-size: 13px;")
         card_layout.addWidget(self.name_label)
@@ -125,7 +123,17 @@ class PropertyPanel(QWidget):
         self.value_label.setStyleSheet("color: #334E68; font-size: 13px; line-height: 1.55;")
         value_layout.addWidget(self.value_label)
         layout.addWidget(self.value_group)
+
+        self.mapping_group = QGroupBox("跨阶段传递设置")
+        mapping_layout = QVBoxLayout(self.mapping_group)
+        mapping_layout.setContentsMargins(14, 18, 14, 14)
+        self.mapping_label = QLabel("选择左侧跨阶段设置项后，这里显示阶段之间的来源参数与目标参数映射。")
+        self.mapping_label.setWordWrap(True)
+        self.mapping_label.setStyleSheet("color: #334E68; font-size: 13px; line-height: 1.55;")
+        mapping_layout.addWidget(self.mapping_label)
+        layout.addWidget(self.mapping_group)
         layout.addStretch()
+        self.mapping_group.hide()
 
     def set_block(self, block):
         self.name_label.setText(block["title"])
@@ -141,7 +149,6 @@ class PropertyPanel(QWidget):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
-        self._algo_buttons.clear()
 
         for index, algorithm in enumerate(block["algorithms"]):
             row = QFrame()
@@ -172,7 +179,14 @@ class PropertyPanel(QWidget):
             name = QLabel(algorithm)
             name.setWordWrap(True)
             name.setStyleSheet("font-size: 13px; font-weight: 600; color: #102A43;")
-
             row_layout.addWidget(tag)
             row_layout.addWidget(name, 1)
             self.algorithm_list.addWidget(row)
+
+        mapping_rows = block.get("mapping_rows")
+        if mapping_rows:
+            self.mapping_group.show()
+            self.mapping_label.setText("；\n".join(mapping_rows))
+        else:
+            self.mapping_group.hide()
+            self.mapping_label.setText("选择左侧跨阶段设置项后，这里显示阶段之间的来源参数与目标参数映射。")

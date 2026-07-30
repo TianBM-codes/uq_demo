@@ -1,10 +1,10 @@
 import json
 
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsScene,
+    QGraphicsItem,
     QGraphicsTextItem,
     QHBoxLayout,
     QLabel,
@@ -30,29 +30,36 @@ class WorkflowNode(BaseNode):
     def __init__(self, block):
         super().__init__(title=block["title"], node_type=block["category"])
         self.block = block
-        self.width = 220
+        self.width = 228
         self.height = 138
         self.title_height = 34
         self.add_input_port("输入")
         self.add_output_port("输出")
         self._apply_fixed_geometry()
+
         self.title_item.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
-        self.title_item.setTextWidth(self.width - 44)
+        self.title_item.setTextWidth(self.width - 24)
         self.title_item.setPos(12, 6)
+        self.title_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.title_item.setAcceptHoverEvents(False)
 
         self.summary_item = QGraphicsTextItem(self)
         self.summary_item.setDefaultTextColor(QColor("#334155"))
         self.summary_item.setFont(QFont("Microsoft YaHei", 8))
         self.summary_item.setTextWidth(self.width - 28)
-        self.summary_item.setPos(14, 46)
+        self.summary_item.setPos(14, 48)
         self.summary_item.setPlainText(self._fit_summary(block["summary"]))
+        self.summary_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.summary_item.setAcceptHoverEvents(False)
 
         self.footer_item = QGraphicsTextItem(self)
         self.footer_item.setDefaultTextColor(QColor("#64748B"))
         self.footer_item.setFont(QFont("Microsoft YaHei", 8))
         self.footer_item.setTextWidth(self.width - 28)
-        self.footer_item.setPos(14, self.height - 32)
+        self.footer_item.setPos(14, self.height - 30)
         self.footer_item.setPlainText(block["section_title"])
+        self.footer_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.footer_item.setAcceptHoverEvents(False)
 
     def _fit_summary(self, text):
         lines = []
@@ -67,12 +74,11 @@ class WorkflowNode(BaseNode):
                 break
         if current and len(lines) < 3:
             lines.append(current)
-        if len(text) > sum(len(line) for line in lines):
+        if len(text) > sum(len(line) for line in lines) and lines:
             lines[-1] = lines[-1].rstrip() + "…"
         return "\n".join(lines)
 
     def _adjust_height(self):
-        # Workflow nodes use a fixed card layout rather than port-count-driven height.
         self._apply_fixed_geometry()
 
     def _apply_fixed_geometry(self):
@@ -84,6 +90,11 @@ class WorkflowNode(BaseNode):
 
     def _get_title_color(self):
         return QColor(NODE_STYLE[self.block["category"]]["title"])
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setSelected(True)
+        super().mousePressEvent(event)
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -101,15 +112,29 @@ class WorkflowNode(BaseNode):
         painter.drawRect(0, self.title_height - 10, self.width, 10)
 
         painter.setPen(QPen(QColor("#E2E8F0"), 1))
-        painter.drawLine(12, self.height - 38, self.width - 12, self.height - 38)
+        painter.drawLine(12, self.height - 36, self.width - 12, self.height - 36)
+
+
+class WorkflowConnection(Connection):
+    def __init__(self, start_port, end_port, payload):
+        super().__init__(start_port, end_port)
+        self.payload = payload
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self._normal_color = QColor(payload.get("line_color", "#64748B"))
+        self._selected_color = QColor("#DC2626")
+        self._pen.setColor(self._normal_color)
+
+    def paint(self, painter, option, widget=None):
+        self._pen.setWidth(4 if self.isSelected() else 2)
+        self._pen.setColor(self._selected_color if self.isSelected() else self._normal_color)
+        super().paint(painter, option, widget)
 
 
 class WorkflowScene(UQGraphicsScene):
     selection_payload_changed = Signal(object)
 
-    def __init__(self, nodes_by_id):
+    def __init__(self):
         super().__init__()
-        self.nodes_by_id = nodes_by_id
         self.setBackgroundBrush(QBrush(QColor("#F8FBFF")))
         self.selectionChanged.connect(self._emit_selection)
 
@@ -121,19 +146,25 @@ class WorkflowScene(UQGraphicsScene):
         self._emit_selection()
         return node
 
-    def create_connection(self, start_node, end_node):
+    def create_connection(self, start_node, end_node, payload):
         if start_node == end_node:
             return None
         for connection in self.connections:
             if connection.start_port.node == start_node and connection.end_port.node == end_node:
                 return connection
-        connection = Connection(start_node.output_ports[0], end_node.input_ports[0])
+        connection = WorkflowConnection(start_node.output_ports[0], end_node.input_ports[0], payload)
         self.add_connection(connection)
         self._emit_selection()
         return connection
 
     def selected_nodes(self):
         return [item for item in self.selectedItems() if isinstance(item, WorkflowNode)]
+
+    def selected_connection(self):
+        for item in self.selectedItems():
+            if isinstance(item, WorkflowConnection):
+                return item
+        return None
 
     def delete_selected(self):
         selected = list(self.selectedItems())
@@ -150,7 +181,7 @@ class WorkflowScene(UQGraphicsScene):
                         self.connections.remove(conn)
                     self.removeItem(conn)
                 self.removeItem(item)
-            elif isinstance(item, Connection):
+            elif isinstance(item, WorkflowConnection):
                 if item in self.connections:
                     self.connections.remove(item)
                 self.removeItem(item)
@@ -163,6 +194,11 @@ class WorkflowScene(UQGraphicsScene):
         self._emit_selection()
 
     def _emit_selection(self):
+        connection = self.selected_connection()
+        if connection:
+            self.selection_payload_changed.emit(connection.payload)
+            return
+
         nodes = self.selected_nodes()
         if len(nodes) == 1:
             self.selection_payload_changed.emit(nodes[0].block)
@@ -172,19 +208,19 @@ class WorkflowScene(UQGraphicsScene):
                 {
                     "title": "多节点选择",
                     "section_title": "流程编排",
-                    "stage_hint": "已选择多个组件",
-                    "goal": "可以执行“连接选中节点”，让两个组件之间通过线建立参数传递关系。",
-                    "inputs": "上游节点输出",
-                    "outputs": "下游节点输入",
-                    "algorithms": ["建立连接线", "调整节点位置", "删除或重连"],
+                    "stage_hint": "当前阶段内部流程",
+                    "goal": "可以执行“连接选中节点”，建立当前阶段内四个步骤之间的数据流关系。",
+                    "inputs": "上游模块输出",
+                    "outputs": "下游模块输入",
+                    "algorithms": ["建立连接线", "调整模块顺序", "删除或重连"],
                     "config_items": [
                         f"当前选中节点数：{len(nodes)}",
-                        "建议先选上游节点，再选下游节点",
-                        "连接建立后，拖动节点时连线会自动更新",
+                        "建议先选上游模块，再选下游模块",
+                        "跨阶段传递请在左侧“跨阶段设置”中配置",
                     ],
                     "highlight_values": [
                         f"当前连接数：{len(self.connections)}",
-                        "节点位置",
+                        "模块位置",
                         "上下游关系",
                     ],
                 }
@@ -199,7 +235,11 @@ class WorkflowView(UQGraphicsView):
     def __init__(self, scene):
         super().__init__(scene)
         self.setAcceptDrops(True)
-        self.setDragMode(UQGraphicsView.DragMode.RubberBandDrag)
+        self.setDragMode(UQGraphicsView.DragMode.NoDrag)
+        self._is_panning = False
+        self._pan_start = None
+        self._pan_h = 0
+        self._pan_v = 0
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-uq-block"):
@@ -223,6 +263,50 @@ class WorkflowView(UQGraphicsView):
             return
         super().dropEvent(event)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self._is_panning = True
+            self._pan_start = event.position().toPoint()
+            self._pan_h = self.horizontalScrollBar().value()
+            self._pan_v = self.verticalScrollBar().value()
+            self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            item = self.itemAt(event.position().toPoint())
+            if item is None:
+                self.setDragMode(UQGraphicsView.DragMode.RubberBandDrag)
+            else:
+                self.setDragMode(UQGraphicsView.DragMode.NoDrag)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._is_panning and (
+            event.button() == Qt.MouseButton.MiddleButton
+            or event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._is_panning = False
+            self._pan_start = None
+            self.viewport().unsetCursor()
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
+        self.setDragMode(UQGraphicsView.DragMode.NoDrag)
+
+    def mouseMoveEvent(self, event):
+        if self._is_panning and self._pan_start is not None:
+            delta = event.position().toPoint() - self._pan_start
+            self.horizontalScrollBar().setValue(self._pan_h - delta.x())
+            self.verticalScrollBar().setValue(self._pan_v - delta.y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
 
 class WorkflowCanvas(QWidget):
     node_selected = Signal(object)
@@ -230,7 +314,7 @@ class WorkflowCanvas(QWidget):
     def __init__(self, nodes, parent=None):
         super().__init__(parent)
         self.nodes = nodes
-        self.scene = WorkflowScene(nodes)
+        self.scene = WorkflowScene()
         self.view = WorkflowView(self.scene)
         self.scene.selection_payload_changed.connect(self.node_selected.emit)
         self.view.node_dropped.connect(self._on_node_dropped)
@@ -252,11 +336,11 @@ class WorkflowCanvas(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        title = QLabel("拖拽式传播建模画布")
+        title = QLabel("单阶段不确定性传播流程")
         title.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        note = QLabel("把左侧模块拖到中央画布，节点可再次拖动。选择两个组件后执行连接，就能用线建立上下游关系。")
+        note = QLabel("中央只展示当前阶段内部通用的四步流程：不确定因素注入、模型样板库、不确定性传播建模、可靠性分析与评价。跨阶段传递在左侧单独设置。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #52606D; font-size: 13px;")
         layout.addWidget(note)
@@ -287,7 +371,7 @@ class WorkflowCanvas(QWidget):
         toolbar_layout.setContentsMargins(12, 10, 12, 10)
         toolbar_layout.setSpacing(10)
 
-        add_demo = QPushButton("加载演示链路")
+        add_demo = QPushButton("加载四步流程")
         add_demo.clicked.connect(self.load_demo_workflow)
         connect_btn = QPushButton("连接选中节点")
         connect_btn.clicked.connect(self.connect_selected_nodes)
@@ -319,11 +403,11 @@ class WorkflowCanvas(QWidget):
         layout.addWidget(frame, 1)
 
     def _on_node_dropped(self, event):
-        block = self.nodes[event["payload"]["node_id"]]
+        block = dict(self.nodes[event["payload"]["node_id"]])
         self.scene.add_block_node(block, event["pos"])
 
     def add_node_by_id(self, node_id, pos=None):
-        block = self.nodes[node_id]
+        block = dict(self.nodes[node_id])
         if pos is None:
             center = self.view.mapToScene(self.view.viewport().rect().center())
             pos = QPointF(center.x() - 80, center.y() - 40)
@@ -334,24 +418,65 @@ class WorkflowCanvas(QWidget):
         if len(nodes) != 2:
             return False
         nodes = sorted(nodes, key=lambda node: node.scenePos().x())
-        self.scene.create_connection(nodes[0], nodes[1])
+        payload = self._build_connection_payload(nodes[0], nodes[1])
+        self.scene.create_connection(nodes[0], nodes[1], payload)
         return True
+
+    def _build_connection_payload(self, start_node, end_node):
+        return {
+            "title": f"{start_node.block['title']} -> {end_node.block['title']}",
+            "section_title": "阶段内流程连接",
+            "stage_hint": "当前阶段内部",
+            "goal": "建立当前阶段内四个步骤之间的参数流和响应传递关系。",
+            "inputs": f"{start_node.block['title']}输出：参数样本、模型响应、传播结果",
+            "outputs": f"{end_node.block['title']}输入：本阶段下游分析所需变量",
+            "algorithms": ["直接传递", "接口映射", "结果筛选后传递"],
+            "config_items": [
+                f"来源模块：{start_node.block['title']}",
+                f"目标模块：{end_node.block['title']}",
+                "跨阶段传递请在左侧单独设置，不在这里配置",
+            ],
+            "highlight_values": [
+                "来源变量",
+                "目标变量",
+                "接口匹配关系",
+            ],
+            "line_color": "#64748B",
+        }
+
+    def highlight_section(self, section_key):
+        for item in self.scene.items():
+            if isinstance(item, WorkflowNode) and item.block["category"] == section_key:
+                item.setSelected(True)
+                self.scene._emit_selection()
+                return
 
     def load_demo_workflow(self):
         self.scene.clear_workflow()
-        positions = {
-            "injection": QPointF(-420, -40),
-            "functional": QPointF(-120, -40),
-            "propagation": QPointF(180, -40),
-            "reliability": QPointF(480, -40),
+        created = {
+            "injection": self.add_node_by_id("injection", QPointF(-460, -30)),
+            "functional": self.add_node_by_id("functional", QPointF(-150, -30)),
+            "propagation": self.add_node_by_id("propagation", QPointF(160, -30)),
+            "reliability": self.add_node_by_id("reliability", QPointF(470, -30)),
         }
-        created = {}
-        for node_id, pos in positions.items():
-            created[node_id] = self.scene.add_block_node(self.nodes[node_id], pos)
-            created[node_id].setSelected(False)
-        self.scene.create_connection(created["injection"], created["functional"])
-        self.scene.create_connection(created["functional"], created["propagation"])
-        self.scene.create_connection(created["propagation"], created["reliability"])
+        for item in created.values():
+            item.setSelected(False)
+
+        self.scene.create_connection(
+            created["injection"],
+            created["functional"],
+            self._build_connection_payload(created["injection"], created["functional"]),
+        )
+        self.scene.create_connection(
+            created["functional"],
+            created["propagation"],
+            self._build_connection_payload(created["functional"], created["propagation"]),
+        )
+        self.scene.create_connection(
+            created["propagation"],
+            created["reliability"],
+            self._build_connection_payload(created["propagation"], created["reliability"]),
+        )
         self.view.fit_all()
 
     def reset_view(self):
