@@ -188,14 +188,19 @@ class WorkbenchBlock(QGraphicsItem):
         if self.data.get("kind") == "model":
             return self._model_payload(self.data["title"], None)
         scope = self.data.get("scope", self.data["title"])
+        model_options = []
+        for category, models in self.data.get("catalog", {}).get(scope, {}).items():
+            for model in models:
+                model_options.append({**model, "category": category})
         return {
             "title": self.data.get("label", self.data["title"]),
             "param_name": self.data.get("label", self.data["title"]),
             "source": "模型树",
+            "model_options": model_options,
             "config_context": {
                 "workflow": self.data.get("workflow", ""),
                 "scope": scope,
-                "category": "节点总体配置",
+                "category": model_options[0].get("category", "节点总体配置") if model_options else "节点总体配置",
             },
             "io": [
                 ("输入", "上游阶段或层级数据", "作为阶段块输入"),
@@ -358,6 +363,20 @@ class WorkbenchBlock(QGraphicsItem):
         scene = self.scene()
         if hasattr(scene, "selection_payload_changed"):
             scene.selection_payload_changed.emit(payload)
+        if hasattr(scene, "model_configured"):
+            scene.model_configured.emit(
+                {
+                    "context": payload["config_context"],
+                    "model_name": payload["param_name"],
+                }
+            )
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.scene():
+            for connection in getattr(self.scene(), "connections", []):
+                if connection.start_port.block == self or connection.end_port.block == self:
+                    connection.update_path()
+        return super().itemChange(change, value)
 
 
 def models_to_payloads(models):
@@ -383,13 +402,6 @@ def models_to_payloads(models):
             }
         )
     return payloads
-
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.scene():
-            for connection in getattr(self.scene(), "connections", []):
-                if connection.start_port.block == self or connection.end_port.block == self:
-                    connection.update_path()
-        return super().itemChange(change, value)
 
 
 class WorkbenchConnection(QGraphicsPathItem):
@@ -441,6 +453,7 @@ class WorkbenchConnection(QGraphicsPathItem):
 class WorkbenchScene(QGraphicsScene):
     selection_payload_changed = Signal(object)
     block_label_changed = Signal(dict)
+    model_configured = Signal(dict)
 
     def __init__(self):
         super().__init__()
@@ -692,6 +705,7 @@ class WorkflowCanvas(QWidget):
     selection_changed = Signal(object)
     block_added = Signal(dict)
     block_renamed = Signal(dict)
+    model_configured = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -702,6 +716,7 @@ class WorkflowCanvas(QWidget):
         self.catalog = {}
         self.scene.selection_payload_changed.connect(self.selection_changed.emit)
         self.scene.block_label_changed.connect(self.block_renamed.emit)
+        self.scene.model_configured.connect(self.model_configured.emit)
         self.view.item_dropped.connect(self._on_item_dropped)
         self._setup_ui()
 

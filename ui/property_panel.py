@@ -149,7 +149,6 @@ class PropertyPanel(QWidget):
         self._set_form(payload)
         self._fill_io(payload.get("io", []))
         self._fill_mapping(payload.get("mapping", []))
-        self._emit_configured_model(payload)
 
     def _set_model_options(self, options, selected_name):
         self._updating_model_combo = True
@@ -158,7 +157,7 @@ class PropertyPanel(QWidget):
         if self._model_options:
             self.model_selector.setEnabled(True)
             for option in self._model_options:
-                self.model_selector.addItem(option.get("param_name", option.get("name", option.get("title", "模型"))), option)
+                self.model_selector.addItem(self._model_display_text(option), option)
             names = [option.get("param_name", option.get("name", option.get("title", ""))) for option in self._model_options]
             if selected_name in names:
                 self.model_selector.setCurrentIndex(names.index(selected_name))
@@ -176,6 +175,14 @@ class PropertyPanel(QWidget):
         category = option.get("category", "模型")
         option["param_name"] = name
         option.setdefault("title", f"{scope} - {category} - {name}" if scope else name)
+        option.setdefault(
+            "config_context",
+            {
+                "workflow": option.get("workflow", ""),
+                "scope": scope,
+                "category": category,
+            },
+        )
         option.setdefault("var_type", "随机变量" if "不确定" in category else "区间变量")
         option.setdefault("dist_type", "Normal" if "不确定" in category else "Interval")
         option.setdefault("source", "跨层级跨阶段模型输入输出表")
@@ -189,6 +196,13 @@ class PropertyPanel(QWidget):
         option.setdefault("mapping", [(option["title"], "画布节点", "模型配置")])
         return option
 
+    def _model_display_text(self, option):
+        name = option.get("param_name", option.get("name", option.get("title", "模型")))
+        category = option.get("category", "")
+        if category and category != "模型":
+            return f"{category} - {name}"
+        return name
+
     def _on_model_selected(self, index):
         if self._updating_model_combo or index < 0 or not self._model_options:
             return
@@ -196,7 +210,11 @@ class PropertyPanel(QWidget):
         if not payload:
             return
         payload = dict(payload)
-        payload["config_context"] = self._current_payload.get("config_context", payload.get("config_context", {}))
+        option_context = payload.get("config_context", {})
+        if option_context.get("scope") and option_context.get("category"):
+            payload["config_context"] = option_context
+        else:
+            payload["config_context"] = self._current_payload.get("config_context", {})
         self.current_label.setText(payload.get("title", payload.get("name", "当前对象")))
         self._set_form(payload)
         self._fill_io(payload.get("io", []))

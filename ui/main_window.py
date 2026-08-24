@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
         self.workflow_canvas.selection_changed.connect(self.property_panel.show_payload)
         self.workflow_canvas.block_added.connect(self._on_block_added)
         self.workflow_canvas.block_renamed.connect(self.toolbox.rename_instance)
+        self.workflow_canvas.model_configured.connect(self._on_model_configured)
         self.property_panel.model_configured.connect(self._on_model_configured)
 
     def _enter_editor(self, workflow):
