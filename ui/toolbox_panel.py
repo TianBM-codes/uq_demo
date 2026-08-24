@@ -1,97 +1,79 @@
 import json
+from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag, QFont
-from PySide6.QtWidgets import (
-    QFrame,
-    QGroupBox,
-    QLabel,
-    QPushButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
 
 
-LIBRARY_SECTIONS = [
-    {
-        "key": "cross_stage",
-        "title": "跨阶段设置",
-        "color": "#0F766E",
-        "description": "单独配置设计到制造、制造到试验、试验到服役之间的参数传递与结果继承。",
-        "items": [
-            "设计 -> 制造 传递设置",
-            "制造 -> 试验 传递设置",
-            "试验 -> 服役 传递设置",
-        ],
-    },
-    {
-        "key": "functional",
-        "title": "功能性模型",
-        "color": "#2563EB",
-        "description": "覆盖设计、制造、试验、服役四类场景，作为不确定性传播的承载模型。",
-        "items": [
-            "弹性静力学模型",
-            "刚柔耦合动力学模型",
-            "机电耦合模型",
-            "密封性能分析模型",
-            "装配模型",
-            "退化模型",
-        ],
-    },
-    {
-        "key": "propagation",
-        "title": "不确定性传播模型",
-        "color": "#D97706",
-        "description": "突出参数如何注入、如何传播、如何形成当前阶段内部响应。",
-        "items": [
-            "概率传播模型",
-            "区间传播模型",
-            "概率-区间混合传播模型",
-            "随机过程传播模型",
-            "随机场传播模型",
-            "模糊传播模型",
-        ],
-    },
-    {
-        "key": "reliability",
-        "title": "可靠性分析模型",
-        "color": "#7C3AED",
-        "description": "支持零组件级与系统级可靠性分析算法切换。",
-        "items": [
-            "一次二阶矩模型",
-            "响应面模型",
-            "蒙特卡洛模型",
-            "代理模型",
-            "故障树模型",
-            "贝叶斯网络模型",
-        ],
-    },
-    {
-        "key": "support",
-        "title": "支撑模块",
-        "color": "#059669",
-        "description": "用于参数注入、模型修正、数据闭环和结果评估。",
-        "items": [
-            "不确定因素注入",
-            "参数映射与接口配置",
-            "模型修正与贝叶斯校准",
-            "敏感性分析",
-            "寿命预测与风险评价",
-        ],
-    },
-]
+WORKFLOW_MIME = "application/x-uq-workflow-payload"
+WORKFLOW_LABELS = {"cross_level": "跨层级", "cross_stage": "跨阶段"}
+SCOPE_KIND = {"cross_level": "level", "cross_stage": "stage"}
+SCOPE_NAMES = {
+    "cross_level": ["零部件", "组件", "子系统", "系统", "装备"],
+    "cross_stage": ["设计阶段", "制造阶段", "试验阶段", "服役阶段"],
+}
+MODEL_CATEGORIES = ["功能性能模型", "不确定性传播模型", "零组件可靠性模型", "系统可靠性模型"]
+
+
+class ModelTreeWidget(QTreeWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_start_pos = None
+        self.setDragEnabled(True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.MouseButton.LeftButton) or self._drag_start_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            super().mouseMoveEvent(event)
+            return
+
+        item = self.itemAt(self._drag_start_pos)
+        payload = self._drag_payload(item)
+        if not payload:
+            super().mouseMoveEvent(event)
+            return
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(WORKFLOW_MIME, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+    def _drag_payload(self, item):
+        if item is None:
+            return None
+        payload = dict(item.data(0, Qt.ItemDataRole.UserRole) or {})
+        if payload.get("kind") in {"route", "stage", "level"}:
+            return payload
+        return None
 
 
 class ToolboxPanel(QWidget):
-    section_selected = Signal(str, str)
     item_selected = Signal(dict)
-    reset_requested = Signal()
+    workflow_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(360)
+        self.setFixedWidth(300)
+        self.current_workflow = "cross_level"
+        self.catalog = self._load_catalog()
+        self.selected_models = {}
+        self.instances = {}
         self._setup_ui()
+        self.set_workflow(self.current_workflow)
 
     def _setup_ui(self):
         self.setStyleSheet(
@@ -101,200 +83,324 @@ class ToolboxPanel(QWidget):
                 color: #102A43;
                 font-family: "Microsoft YaHei";
             }
+            QPushButton {
+                background: white;
+                border: 1px solid #D9E2EC;
+                border-radius: 10px;
+                padding: 9px 10px;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton:checked {
+                background: #1D4ED8;
+                color: white;
+                border-color: #1D4ED8;
+            }
+            QTreeWidget {
+                background: white;
+                border: 1px solid #D9E2EC;
+                border-radius: 8px;
+                padding: 8px;
+                font-size: 13px;
+            }
+            QTreeWidget::item {
+                min-height: 28px;
+                padding: 3px 4px;
+            }
+            QTreeWidget::item:selected {
+                background: #DBEAFE;
+                color: #1D4ED8;
+                border-radius: 4px;
+            }
             """
         )
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
 
-        area = QScrollArea()
-        area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.Shape.NoFrame)
-        root.addWidget(area)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        container = QWidget()
-        area.setWidget(container)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(16)
-
-        title = QLabel("样板库与模块库")
-        title.setFont(QFont("Microsoft YaHei", 17, QFont.Weight.Bold))
+        title = QLabel("工作流结构")
+        title.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        subtitle = QLabel("中央只处理当前阶段内部流程。跨阶段传递单独放在左侧设置。")
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color: #52606D; font-size: 13px; line-height: 1.45;")
-        layout.addWidget(subtitle)
+        self.cross_level_btn = QPushButton("跨层级")
+        self.cross_level_btn.setCheckable(True)
+        self.cross_level_btn.clicked.connect(lambda: self.set_workflow("cross_level"))
+        layout.addWidget(self.cross_level_btn)
 
-        for section in LIBRARY_SECTIONS:
-            group = QGroupBox(section["title"])
-            group.setStyleSheet(
-                f"""
-                QGroupBox {{
-                    font-size: 15px;
-                    font-weight: 700;
-                    color: {section['color']};
-                    border: 1px solid #D9E2EC;
-                    border-radius: 18px;
-                    margin-top: 10px;
-                    background: rgba(255, 255, 255, 0.97);
-                }}
-                QGroupBox::title {{
-                    subcontrol-origin: margin;
-                    left: 12px;
-                    padding: 0 6px;
-                }}
-                """
+        self.cross_stage_btn = QPushButton("跨阶段")
+        self.cross_stage_btn.setCheckable(True)
+        self.cross_stage_btn.clicked.connect(lambda: self.set_workflow("cross_stage"))
+        layout.addWidget(self.cross_stage_btn)
+
+        hint = QLabel("从“可添加对象”拖拽整体流程或阶段/层级到画布；具体模型在右侧配置。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #52606D; font-size: 12px; line-height: 1.5;")
+        layout.addWidget(hint)
+
+        self.tree = ModelTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self.tree, 1)
+
+    def set_workflow(self, workflow):
+        if workflow not in WORKFLOW_LABELS:
+            return
+        self.current_workflow = workflow
+        self.cross_level_btn.setChecked(workflow == "cross_level")
+        self.cross_stage_btn.setChecked(workflow == "cross_stage")
+        self._populate_tree()
+        self.workflow_changed.emit(workflow)
+
+    def current_workflow_text(self):
+        return WORKFLOW_LABELS[self.current_workflow]
+
+    def model_options(self, workflow, scope, category):
+        return list(self.catalog.get(workflow, {}).get(scope, {}).get(category, []))
+
+    def mark_model_selected(self, context, model_name):
+        workflow = context.get("workflow", self.current_workflow)
+        scope = context.get("scope", "")
+        category = context.get("category", "")
+        if workflow != self.current_workflow or not scope or not category or not model_name:
+            return
+        self.selected_models[(workflow, scope, category)] = model_name
+        category_item = self._find_category_item(scope, category)
+        if category_item is None:
+            category_item = self._ensure_category_item(scope, category)
+        if category_item is None:
+            return
+
+        marker_text = f"已选：{model_name}"
+        for index in range(category_item.childCount()):
+            child = category_item.child(index)
+            child_payload = child.data(0, Qt.ItemDataRole.UserRole) or {}
+            if child_payload.get("kind") == "selected_model":
+                child.setText(0, marker_text)
+                child.setData(0, Qt.ItemDataRole.UserRole, {"kind": "selected_model", "name": model_name})
+                return
+
+        marker = QTreeWidgetItem([marker_text])
+        marker.setForeground(0, Qt.GlobalColor.darkGreen)
+        marker.setData(0, Qt.ItemDataRole.UserRole, {"kind": "selected_model", "name": model_name})
+        category_item.insertChild(0, marker)
+        category_item.setExpanded(True)
+
+    def mark_block_added(self, payload):
+        workflow = payload.get("workflow", self.current_workflow)
+        scope = payload.get("scope", "")
+        label = payload.get("label", scope)
+        if workflow != self.current_workflow or not scope:
+            return
+        self.instances.setdefault((workflow, scope), [])
+        if label not in self.instances[(workflow, scope)]:
+            self.instances[(workflow, scope)].append(label)
+        self._populate_tree()
+
+    def rename_instance(self, payload):
+        workflow = payload.get("workflow", self.current_workflow)
+        scope = payload.get("scope", "")
+        old_label = payload.get("old_label", "")
+        new_label = payload.get("new_label", "")
+        labels = self.instances.get((workflow, scope), [])
+        for index, label in enumerate(labels):
+            if label == old_label:
+                labels[index] = new_label
+                break
+        self._populate_tree()
+
+    def clear_instances(self):
+        self.instances = {
+            key: value
+            for key, value in self.instances.items()
+            if key[0] != self.current_workflow
+        }
+        self.selected_models = {
+            key: value
+            for key, value in self.selected_models.items()
+            if key[0] != self.current_workflow
+        }
+        self._populate_tree()
+
+    def _populate_tree(self):
+        self.tree.clear()
+        workflow = self.current_workflow
+        root_label = WORKFLOW_LABELS[workflow]
+        root = QTreeWidgetItem([root_label])
+        root.setData(0, Qt.ItemDataRole.UserRole, {"kind": "group", "workflow": workflow, "name": root_label})
+
+        library_root = QTreeWidgetItem(["可添加对象"])
+        library_root.setData(0, Qt.ItemDataRole.UserRole, {"kind": "library", "workflow": workflow, "name": "可添加对象"})
+        self._add_route_item(library_root, workflow, f"{root_label}流程")
+
+        structure_root = QTreeWidgetItem(["已添加到工作流"])
+        structure_root.setData(0, Qt.ItemDataRole.UserRole, {"kind": "structure", "workflow": workflow, "name": "已添加到工作流"})
+
+        for scope in SCOPE_NAMES[workflow]:
+            library_scope_item = QTreeWidgetItem([scope])
+            library_scope_item.setData(
+                0,
+                Qt.ItemDataRole.UserRole,
+                {"kind": SCOPE_KIND[workflow], "workflow": workflow, "name": scope, "scope": scope},
             )
-            group_layout = QVBoxLayout(group)
-            group_layout.setContentsMargins(14, 18, 14, 14)
-            group_layout.setSpacing(10)
+            library_root.addChild(library_scope_item)
 
-            desc = QLabel(section["description"])
-            desc.setWordWrap(True)
-            desc.setStyleSheet("color: #52606D; font-size: 12px;")
-            group_layout.addWidget(desc)
-
-            head_btn = QPushButton("聚焦该类模块")
-            head_btn.setMinimumHeight(42)
-            head_btn.setStyleSheet(self._button_style(section["color"], accent=True))
-            head_btn.clicked.connect(
-                lambda checked=False, key=section["key"], title=section["title"]: self.section_selected.emit(key, title)
+            structure_scope_item = QTreeWidgetItem([scope])
+            structure_scope_item.setData(
+                0,
+                Qt.ItemDataRole.UserRole,
+                {"kind": "scope_bucket", "workflow": workflow, "name": scope, "scope": scope},
             )
-            group_layout.addWidget(head_btn)
-
-            for item in section["items"]:
-                btn = DraggableToolButton(item, section["key"], section["title"])
-                btn.setMinimumHeight(42)
-                btn.setStyleSheet(self._button_style(section["color"], accent=False))
-                btn.set_payload({"section": section["key"], "section_title": section["title"], "item": item})
-                btn.clicked.connect(
-                    lambda checked=False, payload={"section": section["key"], "section_title": section["title"], "item": item}: self.item_selected.emit(payload)
+            for instance in self.instances.get((workflow, scope), []):
+                instance_item = QTreeWidgetItem([instance])
+                instance_item.setData(
+                    0,
+                    Qt.ItemDataRole.UserRole,
+                    {"kind": SCOPE_KIND[workflow], "workflow": workflow, "name": instance, "scope": scope},
                 )
-                group_layout.addWidget(btn)
+                structure_scope_item.addChild(instance_item)
 
-            layout.addWidget(group)
+            for category in MODEL_CATEGORIES:
+                selected_model = self.selected_models.get((workflow, scope, category))
+                if selected_model:
+                    category_item = QTreeWidgetItem([category])
+                    category_item.setData(
+                        0,
+                        Qt.ItemDataRole.UserRole,
+                        {
+                            "kind": "category",
+                            "workflow": workflow,
+                            "scope": scope,
+                            "name": category,
+                            "model_options": self.model_options(workflow, scope, category),
+                        },
+                    )
+                    marker = QTreeWidgetItem([f"已选：{selected_model}"])
+                    marker.setForeground(0, Qt.GlobalColor.darkGreen)
+                    marker.setData(0, Qt.ItemDataRole.UserRole, {"kind": "selected_model", "name": selected_model})
+                    category_item.insertChild(0, marker)
+                    structure_scope_item.addChild(category_item)
+            structure_root.addChild(structure_scope_item)
 
-        helper = QGroupBox("演示控制")
-        helper.setStyleSheet(
-            """
-            QGroupBox {
-                font-size: 15px;
-                font-weight: 700;
-                color: #102A43;
-                border: 1px solid #D9E2EC;
-                border-radius: 18px;
-                margin-top: 10px;
-                background: rgba(255, 255, 255, 0.97);
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
-            """
-        )
-        helper_layout = QVBoxLayout(helper)
-        helper_layout.setContentsMargins(14, 18, 14, 14)
-        helper_layout.setSpacing(12)
+        root.addChild(library_root)
+        root.addChild(structure_root)
 
-        reset_btn = QPushButton("恢复默认流程")
-        reset_btn.setMinimumHeight(46)
-        reset_btn.setStyleSheet(self._button_style("#0F766E", accent=True))
-        reset_btn.clicked.connect(self.reset_requested.emit)
-        helper_layout.addWidget(reset_btn)
+        self.tree.addTopLevelItem(root)
+        self.tree.expandItem(root)
+        self.tree.expandItem(library_root)
+        self.tree.expandItem(structure_root)
 
-        note = QLabel("建议汇报顺序：先看当前阶段内部四步流程，再单独解释跨阶段设置。")
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #52606D; font-size: 12px;")
-        helper_layout.addWidget(note)
-        layout.addWidget(helper)
-        layout.addStretch()
-
-    @staticmethod
-    def _button_style(color, accent):
-        if accent:
-            return f"""
-                QPushButton {{
-                    text-align: left;
-                    background: {color};
-                    color: white;
-                    border: none;
-                    border-radius: 14px;
-                    padding: 11px 14px;
-                    font-size: 14px;
-                    font-weight: 700;
-                }}
-                QPushButton:hover {{
-                    background: {color};
-                }}
-            """
-        return f"""
-            QPushButton {{
-                text-align: left;
-                background: #F8FAFC;
-                color: #102A43;
-                border: 1px solid #D9E2EC;
-                border-radius: 14px;
-                padding: 10px 12px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                border-color: {color};
-                background: white;
-            }}
-        """
-
-
-class DraggableToolButton(QPushButton):
-    def __init__(self, text, section_key, section_title, parent=None):
-        super().__init__(text, parent)
-        self.section_key = section_key
-        self.section_title = section_title
-        self.payload = None
-        self._drag_start = QPoint()
-
-    def set_payload(self, payload):
-        self.payload = payload
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = event.position().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if not (event.buttons() & Qt.MouseButton.LeftButton):
-            return super().mouseMoveEvent(event)
-        if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
-            return super().mouseMoveEvent(event)
-        if not self.payload or self.payload["section"] == "cross_stage":
-            return super().mouseMoveEvent(event)
-
-        drag = QDrag(self)
-        mime = QMimeData()
-        node_id = self._to_node_id(self.payload["item"], self.payload["section"])
-        mime.setData(
-            "application/x-uq-block",
-            QByteArray(json.dumps({"node_id": node_id, "payload": self.payload}, ensure_ascii=False).encode("utf-8")),
-        )
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.CopyAction)
-
-    @staticmethod
-    def _to_node_id(item, section):
-        mapping = {
-            "support": "injection",
-            "functional": "functional",
-            "propagation": "propagation",
-            "reliability": "reliability",
+    def _load_catalog(self):
+        catalog = {
+            workflow: {scope: {category: [] for category in MODEL_CATEGORIES} for scope in scopes}
+            for workflow, scopes in SCOPE_NAMES.items()
         }
-        item_mapping = {
-            "不确定因素注入": "injection",
-            "参数映射与接口配置": "injection",
-            "模型修正与贝叶斯校准": "reliability",
-            "敏感性分析": "reliability",
-            "寿命预测与风险评价": "reliability",
-        }
-        return item_mapping.get(item, mapping.get(section, "propagation"))
+        workbook = self._find_workbook()
+        if not workbook or openpyxl is None:
+            return catalog
+
+        try:
+            worksheet = openpyxl.load_workbook(workbook, data_only=True).active
+        except Exception:
+            return catalog
+
+        current = ["", "", ""]
+        for row in worksheet.iter_rows(min_row=2, values_only=True):
+            level_one, level_two, category, model, inputs, outputs = row[:6]
+            if level_one:
+                current[0] = str(level_one).strip()
+            if level_two:
+                current[1] = str(level_two).strip()
+            if category:
+                current[2] = str(category).strip()
+            if not current[0] or not current[1] or not current[2] or not model:
+                continue
+
+            workflow = "cross_stage" if current[0] == "跨阶段" else "cross_level"
+            scope = current[1]
+            category_name = current[2]
+            if scope not in catalog[workflow]:
+                catalog[workflow][scope] = {category: [] for category in MODEL_CATEGORIES}
+            if category_name not in catalog[workflow][scope]:
+                catalog[workflow][scope][category_name] = []
+            catalog[workflow][scope][category_name].append(
+                {
+                    "kind": "model",
+                    "workflow": workflow,
+                    "scope": scope,
+                    "category": category_name,
+                    "name": str(model).strip(),
+                    "inputs": self._clean_cell(inputs),
+                    "outputs": self._clean_cell(outputs),
+                }
+            )
+        return catalog
+
+    def _find_workbook(self):
+        data_dir = Path(__file__).resolve().parent.parent / "data"
+        matches = sorted(data_dir.glob("跨层级跨阶段模型输入输出表*.xlsx"))
+        return matches[0] if matches else None
+
+    def _clean_cell(self, value):
+        if not value:
+            return ""
+        return " / ".join(part.strip() for part in str(value).splitlines() if part.strip())
+
+    def _add_route_item(self, parent, workflow, name):
+        item = QTreeWidgetItem([name])
+        item.setData(0, Qt.ItemDataRole.UserRole, {"kind": "route", "workflow": workflow, "name": name})
+        parent.addChild(item)
+
+    def _find_category_item(self, scope, category):
+        root = self.tree.topLevelItem(0)
+        if not root:
+            return None
+        for scope_index in range(root.childCount()):
+            parent_item = root.child(scope_index)
+            if parent_item.text(0) != "已添加到工作流":
+                continue
+            for bucket_index in range(parent_item.childCount()):
+                scope_item = parent_item.child(bucket_index)
+                if scope_item.text(0) != scope:
+                    continue
+                for category_index in range(scope_item.childCount()):
+                    category_item = scope_item.child(category_index)
+                    if category_item.text(0) == category:
+                        return category_item
+        return None
+
+    def _ensure_category_item(self, scope, category):
+        root = self.tree.topLevelItem(0)
+        if not root:
+            return None
+        structure_root = None
+        for index in range(root.childCount()):
+            if root.child(index).text(0) == "已添加到工作流":
+                structure_root = root.child(index)
+                break
+        if structure_root is None:
+            return None
+        for scope_index in range(structure_root.childCount()):
+            scope_item = structure_root.child(scope_index)
+            if scope_item.text(0) != scope:
+                continue
+            category_item = QTreeWidgetItem([category])
+            category_item.setData(
+                0,
+                Qt.ItemDataRole.UserRole,
+                {
+                    "kind": "category",
+                    "workflow": self.current_workflow,
+                    "scope": scope,
+                    "name": category,
+                    "model_options": self.model_options(self.current_workflow, scope, category),
+                },
+            )
+            scope_item.addChild(category_item)
+            scope_item.setExpanded(True)
+            return category_item
+        return None
+
+    def _on_item_clicked(self, item):
+        payload = dict(item.data(0, Qt.ItemDataRole.UserRole) or {"kind": "unknown", "name": item.text(0)})
+        self.item_selected.emit(payload)
