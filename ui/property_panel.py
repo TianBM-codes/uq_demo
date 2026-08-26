@@ -20,7 +20,9 @@ class PropertyPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._model_options = []
+        self._model_catalog = {}
         self._updating_model_combo = False
+        self._updating_category_combo = False
         self._current_payload = {}
         self.setFixedWidth(390)
         self._setup_ui()
@@ -93,6 +95,8 @@ class PropertyPanel(QWidget):
         form = QFormLayout(self.basic_group)
         form.setContentsMargins(12, 18, 12, 12)
         form.setVerticalSpacing(9)
+        self.category_selector = QComboBox()
+        self.category_selector.currentIndexChanged.connect(self._on_category_selected)
         self.model_selector = QComboBox()
         self.model_selector.currentIndexChanged.connect(self._on_model_selected)
         self.param_name = QLineEdit()
@@ -103,6 +107,7 @@ class PropertyPanel(QWidget):
         self.mean_value = QLineEdit()
         self.std_value = QLineEdit()
         self.source_value = QLineEdit()
+        form.addRow("模型类别", self.category_selector)
         form.addRow("具体模型", self.model_selector)
         form.addRow("参数名称", self.param_name)
         form.addRow("变量类型", self.var_type)
@@ -137,18 +142,52 @@ class PropertyPanel(QWidget):
         if not payload:
             self._current_payload = {}
             self.current_label.setText("请选择画布中的块或子项")
-            self._set_model_options([], "")
+            self._set_model_catalog({}, "", "")
             self._set_form({})
             self._fill_io([])
             self._fill_mapping([])
             return
 
         self._current_payload = dict(payload)
-        self._set_model_options(payload.get("model_options", []), payload.get("param_name", ""))
+        self._set_model_catalog(
+            payload.get("model_catalog", {}),
+            payload.get("config_context", {}).get("category", ""),
+            payload.get("param_name", ""),
+            payload.get("model_options", []),
+        )
         self.current_label.setText(payload.get("title", payload.get("name", "当前对象")))
         self._set_form(payload)
         self._fill_io(payload.get("io", []))
         self._fill_mapping(payload.get("mapping", []))
+
+    def _set_model_catalog(self, catalog, selected_category, selected_name, fallback_options=None):
+        self._updating_category_combo = True
+        self._model_catalog = {
+            category: [self._normalize_model_option(option) for option in options]
+            for category, options in (catalog or {}).items()
+            if options
+        }
+        if not self._model_catalog and fallback_options:
+            fallback = [self._normalize_model_option(option) for option in fallback_options]
+            for option in fallback:
+                self._model_catalog.setdefault(option.get("category", "模型"), []).append(option)
+
+        self.category_selector.clear()
+        if self._model_catalog:
+            self.category_selector.setEnabled(True)
+            for category in self._model_catalog:
+                self.category_selector.addItem(category)
+            if selected_category in self._model_catalog:
+                self.category_selector.setCurrentText(selected_category)
+            else:
+                self.category_selector.setCurrentIndex(0)
+        else:
+            self.category_selector.setEnabled(False)
+            self.category_selector.addItem("无可切换类别")
+        self._updating_category_combo = False
+
+        current_category = self.category_selector.currentText() if self._model_catalog else ""
+        self._set_model_options(self._model_catalog.get(current_category, []), selected_name)
 
     def _set_model_options(self, options, selected_name):
         self._updating_model_combo = True
@@ -167,6 +206,14 @@ class PropertyPanel(QWidget):
             self.model_selector.setEnabled(False)
             self.model_selector.addItem("无可切换模型")
         self._updating_model_combo = False
+
+    def _on_category_selected(self, index):
+        if self._updating_category_combo or index < 0:
+            return
+        category = self.category_selector.currentText()
+        self._set_model_options(self._model_catalog.get(category, []), "")
+        if self._model_options:
+            self._on_model_selected(self.model_selector.currentIndex())
 
     def _normalize_model_option(self, option):
         option = dict(option)

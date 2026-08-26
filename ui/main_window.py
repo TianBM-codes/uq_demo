@@ -260,8 +260,10 @@ class MainWindow(QMainWindow):
             return detail
 
         if kind in {"stage", "level"}:
+            scope_name = payload.get("scope", name)
+            model_catalog = self.toolbox.catalog.get(payload.get("workflow", ""), {}).get(scope_name, {})
             models = []
-            for categories in self.toolbox.catalog.get(payload.get("workflow", ""), {}).get(name, {}).values():
+            for categories in model_catalog.values():
                 models.extend(categories)
             return {
                 "title": name,
@@ -272,10 +274,11 @@ class MainWindow(QMainWindow):
                 "std": "",
                 "source": "当前工作流结构",
                 "model_options": [self._model_payload(option) for option in models],
+                "model_catalog": model_catalog,
                 "config_context": {
                     "workflow": payload.get("workflow", self.toolbox.current_workflow),
-                    "scope": name,
-                    "category": "节点总体配置",
+                    "scope": scope_name,
+                    "category": next(iter(model_catalog.keys()), "节点总体配置"),
                 },
                 "io": [
                     ("输入", "上游参数 / 工况 / 状态", "作为该大节点配置输入"),
@@ -288,6 +291,9 @@ class MainWindow(QMainWindow):
             detail = dict(model_options[0])
             detail["title"] = f"{scope} - {name} - {detail['param_name']}"
             detail["model_options"] = model_options
+            detail["model_catalog"] = {
+                name: payload.get("model_options", []),
+            }
             detail["config_context"] = {
                 "workflow": payload.get("workflow", self.toolbox.current_workflow),
                 "scope": scope,
@@ -305,6 +311,7 @@ class MainWindow(QMainWindow):
             "std": "",
             "source": "模型树与画布连线",
             "model_options": model_options,
+            "model_catalog": {name: payload.get("model_options", [])} if model_options else {},
             "config_context": {
                 "workflow": payload.get("workflow", self.toolbox.current_workflow),
                 "scope": scope or name,

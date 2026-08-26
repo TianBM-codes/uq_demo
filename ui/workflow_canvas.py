@@ -158,9 +158,10 @@ class WorkbenchBlock(QGraphicsItem):
             return self._model_payload(row_name, row_index)
         category = self._category_for_row(row_name)
         scope = self.data.get("scope", self.data["title"])
+        catalog = self.data.get("catalog", {}).get(scope, {})
         model_options = []
         if category:
-            model_options = self.data.get("catalog", {}).get(scope, {}).get(category, [])
+            model_options = catalog.get(category, [])
         return {
             "title": f"{self.data['title']} - {row_index + 1} {row_name}",
             "param_name": row_name,
@@ -170,6 +171,7 @@ class WorkbenchBlock(QGraphicsItem):
             "std": "10000" if "材料" in row_name else "",
             "source": "材料测试" if "材料" in row_name else "模型/阶段输入",
             "model_options": model_options,
+            "model_catalog": catalog,
             "config_context": {
                 "workflow": self.data.get("workflow", ""),
                 "scope": scope,
@@ -188,8 +190,9 @@ class WorkbenchBlock(QGraphicsItem):
         if self.data.get("kind") == "model":
             return self._model_payload(self.data["title"], None)
         scope = self.data.get("scope", self.data["title"])
+        catalog = self.data.get("catalog", {}).get(scope, {})
         model_options = []
-        for category, models in self.data.get("catalog", {}).get(scope, {}).items():
+        for category, models in catalog.items():
             for model in models:
                 model_options.append({**model, "category": category})
         return {
@@ -197,6 +200,7 @@ class WorkbenchBlock(QGraphicsItem):
             "param_name": self.data.get("label", self.data["title"]),
             "source": "模型树",
             "model_options": model_options,
+            "model_catalog": catalog,
             "config_context": {
                 "workflow": self.data.get("workflow", ""),
                 "scope": scope,
@@ -296,6 +300,14 @@ class WorkbenchBlock(QGraphicsItem):
             scene.emit_block_selection(self)
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        self._update_attached_connections()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self._update_attached_connections()
+
     def mouseDoubleClickEvent(self, event):
         footer_top = self.header_height + len(self.data["rows"]) * self.row_height
         if event.pos().y() >= footer_top:
@@ -347,6 +359,7 @@ class WorkbenchBlock(QGraphicsItem):
             "std": "",
             "source": "右键添加模型",
             "model_options": models_to_payloads(self.data.get("catalog", {}).get(self.data.get("scope", ""), {}).get(category, [])),
+            "model_catalog": self.data.get("catalog", {}).get(self.data.get("scope", ""), {}),
             "config_context": {
                 "workflow": self.data.get("workflow", ""),
                 "scope": self.data.get("scope", self.data["title"]),
@@ -372,11 +385,16 @@ class WorkbenchBlock(QGraphicsItem):
             )
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.scene():
-            for connection in getattr(self.scene(), "connections", []):
-                if connection.start_port.block == self or connection.end_port.block == self:
-                    connection.update_path()
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self._update_attached_connections()
         return super().itemChange(change, value)
+
+    def _update_attached_connections(self):
+        if not self.scene():
+            return
+        for connection in getattr(self.scene(), "connections", []):
+            if connection.start_port.block == self or connection.end_port.block == self:
+                connection.update_path()
 
 
 def models_to_payloads(models):
@@ -422,6 +440,7 @@ class WorkbenchConnection(QGraphicsPathItem):
         path = QPainterPath(start)
         path.cubicTo(QPointF(start.x() + dx, start.y()), QPointF(end.x() - dx, end.y()), end)
         self.setPath(path)
+        self.update()
 
     def paint(self, painter, option, widget=None):
         pen = QPen(QColor("#DC2626") if self.isSelected() else self.color, 3 if self.isSelected() else 2)
