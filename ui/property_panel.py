@@ -1,12 +1,15 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QLabel,
     QLineEdit,
     QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -24,6 +27,8 @@ class PropertyPanel(QWidget):
         self._updating_model_combo = False
         self._updating_category_combo = False
         self._current_payload = {}
+        self._qbhk_fields = {}
+        self._uq_fields = {}
         self.setFixedWidth(390)
         self._setup_ui()
 
@@ -117,6 +122,52 @@ class PropertyPanel(QWidget):
         form.addRow("来源", self.source_value)
         layout.addWidget(self.basic_group)
 
+        self.qbhk_group = QGroupBox("曲柄滑块动力学模型")
+        qbhk_layout = QFormLayout(self.qbhk_group)
+        qbhk_layout.setContentsMargins(12, 18, 12, 12)
+        qbhk_layout.setVerticalSpacing(9)
+        for key, label, value in [
+            ("E", "弹性模量 E (Pa)", "2e9"),
+            ("L1", "曲柄长度 L1 (m)", "0.2"),
+            ("L2", "连杆长度 L2 (m)", "0.6"),
+            ("rho", "密度 rho (kg/m3)", "7850"),
+            ("d", "截面直径 d (m)", "0.02"),
+            ("g", "重力 g (m/s2)", "9.81"),
+            ("m_slider", "滑块质量 (kg)", "0.5"),
+            ("omega", "角速度 omega (rad/s)", "3.1415926"),
+            ("F", "滑块外力 F (N)", "-10"),
+            ("T", "总时间 T (s)", "1"),
+            ("dt", "时间步长 dt (s)", "0.01"),
+            ("Ne", "ANCF 单元数 Ne", "4"),
+            ("alpha_m", "alpha_m", "0.2"),
+            ("alpha_f", "alpha_f", "0.4"),
+            ("tol", "残差容差", "1e-6"),
+            ("max_iter", "最大迭代次数", "15"),
+        ]:
+            edit = QLineEdit(value)
+            self._qbhk_fields[key] = edit
+            qbhk_layout.addRow(label, edit)
+        layout.addWidget(self.qbhk_group)
+
+        self.uq_group = QGroupBox("不确定性传播")
+        uq_layout = QVBoxLayout(self.uq_group)
+        self.enable_uq = QCheckBox("启用 Monte Carlo 不确定性传播")
+        self.enable_uq.setChecked(True)
+        uq_layout.addWidget(self.enable_uq)
+        count_row = QFormLayout()
+        self.sample_count = QSpinBox()
+        self.sample_count.setRange(1, 500)
+        self.sample_count.setValue(5)
+        count_row.addRow("样本数", self.sample_count)
+        uq_layout.addLayout(count_row)
+        self.uq_table = QTableWidget(0, 5)
+        self.uq_table.setHorizontalHeaderLabels(["启用", "变量", "分布", "均值", "标准差"])
+        self.uq_table.verticalHeader().setVisible(False)
+        self.uq_table.horizontalHeader().setStretchLastSection(True)
+        uq_layout.addWidget(self.uq_table)
+        self._fill_uq_defaults()
+        layout.addWidget(self.uq_group)
+
         self.io_group = QGroupBox("输入 / 输出")
         io_layout = QVBoxLayout(self.io_group)
         self.io_table = QTableWidget(0, 3)
@@ -144,6 +195,7 @@ class PropertyPanel(QWidget):
             self.current_label.setText("请选择画布中的块或子项")
             self._set_model_catalog({}, "", "")
             self._set_form({})
+            self._set_qbhk_visible(False)
             self._fill_io([])
             self._fill_mapping([])
             return
@@ -157,6 +209,7 @@ class PropertyPanel(QWidget):
         )
         self.current_label.setText(payload.get("title", payload.get("name", "当前对象")))
         self._set_form(payload)
+        self._set_qbhk_visible(self._is_qbhk_payload(payload))
         self._fill_io(payload.get("io", []))
         self._fill_mapping(payload.get("mapping", []))
 
@@ -233,6 +286,7 @@ class PropertyPanel(QWidget):
         option.setdefault("var_type", "随机变量" if "不确定" in category else "区间变量")
         option.setdefault("dist_type", "Normal" if "不确定" in category else "Interval")
         option.setdefault("source", "跨层级跨阶段模型输入输出表")
+        option.setdefault("model_id", option.get("model_id", ""))
         option.setdefault(
             "io",
             [
@@ -264,6 +318,7 @@ class PropertyPanel(QWidget):
             payload["config_context"] = self._current_payload.get("config_context", {})
         self.current_label.setText(payload.get("title", payload.get("name", "当前对象")))
         self._set_form(payload)
+        self._set_qbhk_visible(self._is_qbhk_payload(payload))
         self._fill_io(payload.get("io", []))
         self._fill_mapping(payload.get("mapping", []))
         self._emit_configured_model(payload)
@@ -286,6 +341,75 @@ class PropertyPanel(QWidget):
         self.source_value.setText(payload.get("source", "材料测试"))
         self.var_type.setCurrentText(payload.get("var_type", "随机变量"))
         self.dist_type.setCurrentText(payload.get("dist_type", "Normal"))
+
+    def _set_qbhk_visible(self, visible):
+        self.qbhk_group.setVisible(visible)
+        self.uq_group.setVisible(visible)
+
+    def _is_qbhk_payload(self, payload):
+        text = " ".join(
+            str(payload.get(key, ""))
+            for key in ("model_id", "title", "param_name", "name")
+        )
+        return "qbhk" in text.lower() or "曲柄滑块" in text
+
+    def _fill_uq_defaults(self):
+        rows = [
+            (True, "E", "Normal", "2e9", "1e8"),
+            (True, "F", "Normal", "-10", "1"),
+            (False, "d", "Normal", "0.02", "0.001"),
+            (False, "rho", "Normal", "7850", "150"),
+            (False, "m_slider", "Normal", "0.5", "0.03"),
+            (False, "omega", "Normal", "3.1415926", "0.05"),
+        ]
+        self.uq_table.setRowCount(len(rows))
+        for row, (enabled, name, dist, mean, std) in enumerate(rows):
+            checkbox = QCheckBox()
+            checkbox.setChecked(enabled)
+            self.uq_table.setCellWidget(row, 0, checkbox)
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.uq_table.setItem(row, 1, name_item)
+            dist_combo = QComboBox()
+            dist_combo.addItems(["Normal", "Uniform"])
+            dist_combo.setCurrentText(dist)
+            self.uq_table.setCellWidget(row, 2, dist_combo)
+            self.uq_table.setItem(row, 3, QTableWidgetItem(mean))
+            self.uq_table.setItem(row, 4, QTableWidgetItem(std))
+
+    def qbhk_config(self):
+        params = {}
+        for key, edit in self._qbhk_fields.items():
+            value = edit.text().strip()
+            if key in {"Ne", "max_iter"}:
+                params[key] = int(float(value))
+            else:
+                params[key] = float(value)
+
+        uncertain = {}
+        for row in range(self.uq_table.rowCount()):
+            name_item = self.uq_table.item(row, 1)
+            if not name_item:
+                continue
+            name = name_item.text()
+            checkbox = self.uq_table.cellWidget(row, 0)
+            combo = self.uq_table.cellWidget(row, 2)
+            mean_item = self.uq_table.item(row, 3)
+            std_item = self.uq_table.item(row, 4)
+            mean = float(mean_item.text()) if mean_item and mean_item.text().strip() else params.get(name, 0.0)
+            std = float(std_item.text()) if std_item and std_item.text().strip() else 0.0
+            uncertain[name] = {
+                "enabled": bool(checkbox and checkbox.isChecked()),
+                "dist": combo.currentText() if combo else "Normal",
+                "mean": mean,
+                "std": std,
+            }
+        return {
+            "params": params,
+            "uncertain": uncertain,
+            "enable_uq": self.enable_uq.isChecked(),
+            "sample_count": self.sample_count.value(),
+        }
 
     def _fill_io(self, rows):
         if not rows:

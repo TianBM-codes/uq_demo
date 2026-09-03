@@ -4,15 +4,20 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
     QToolBar,
     QVBoxLayout,
+    QApplication,
     QWidget,
 )
 
+from core.qbhk_solver import solve_qbhk
+from core.qbhk_uq import run_qbhk_uq
 from .property_panel import PropertyPanel
+from .result_dialog import ResultDialog
 from .toolbox_panel import ToolboxPanel
 from .workflow_canvas import WorkflowCanvas
 
@@ -23,6 +28,7 @@ class MainWindow(QMainWindow):
         self.toolbox = None
         self.workflow_canvas = None
         self.property_panel = None
+        self.result_dialog = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -189,6 +195,10 @@ class MainWindow(QMainWindow):
         fit_action.triggered.connect(self.workflow_canvas.fit_all)
         self.toolbar.addAction(fit_action)
 
+        run_action = QAction("运行", self)
+        run_action.triggered.connect(self._run_qbhk_model)
+        self.toolbar.addAction(run_action)
+
         delete_action = QAction("删除选中", self)
         delete_action.triggered.connect(self._delete_selected)
         self.toolbar.addAction(delete_action)
@@ -332,6 +342,7 @@ class MainWindow(QMainWindow):
         return {
             "title": title,
             "param_name": name,
+            "model_id": payload.get("model_id", ""),
             "var_type": "随机变量" if "不确定" in category else "区间变量",
             "dist_type": "Normal" if "不确定" in category else "Interval",
             "mean": "",
@@ -348,6 +359,33 @@ class MainWindow(QMainWindow):
                 "category": category,
             },
         }
+
+    def _run_qbhk_model(self):
+        if self.toolbox.current_workflow != "cross_stage":
+            QMessageBox.information(self, "运行模型", "曲柄滑块动力学模型当前先接入到跨阶段工作流。")
+            return
+        try:
+            config = self.property_panel.qbhk_config()
+            self.statusBar().showMessage("正在运行曲柄滑块动力学模型...")
+            QApplication.processEvents()
+            if config["enable_uq"]:
+                result = run_qbhk_uq(
+                    config["params"],
+                    config["uncertain"],
+                    sample_count=config["sample_count"],
+                )
+                mode = "不确定性传播"
+            else:
+                result = {"deterministic": solve_qbhk(config["params"]), "statistics": None}
+                mode = "确定性仿真"
+        except Exception as exc:
+            QMessageBox.critical(self, "运行失败", str(exc))
+            self.statusBar().showMessage("模型运行失败")
+            return
+
+        self.result_dialog = ResultDialog(self)
+        self.result_dialog.show_qbhk_results(result, mode)
+        self.statusBar().showMessage(f"曲柄滑块动力学模型运行完成：{mode}")
 
     def _default_payload(self):
         return {

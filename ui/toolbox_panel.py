@@ -297,11 +297,13 @@ class ToolboxPanel(QWidget):
         }
         workbook = self._find_workbook()
         if not workbook or openpyxl is None:
+            self._add_builtin_models(catalog)
             return catalog
 
         try:
             worksheet = openpyxl.load_workbook(workbook, data_only=True).active
         except Exception:
+            self._add_builtin_models(catalog)
             return catalog
 
         current = ["", "", ""]
@@ -334,7 +336,23 @@ class ToolboxPanel(QWidget):
                     "outputs": self._clean_cell(outputs),
                 }
             )
+        self._add_builtin_models(catalog)
         return catalog
+
+    def _add_builtin_models(self, catalog):
+        model = {
+            "kind": "model",
+            "workflow": "cross_stage",
+            "scope": "设计阶段",
+            "category": "功能性能模型",
+            "name": "曲柄滑块刚柔耦合动力学模型",
+            "model_id": "qbhk",
+            "inputs": "E / L1 / L2 / rho / d / omega / F / T / dt / Ne",
+            "outputs": "滑块位移 / 速度 / 加速度 / 曲柄轨迹 / 连杆变形 / 不确定性响应统计",
+        }
+        models = catalog["cross_stage"]["设计阶段"]["功能性能模型"]
+        if not any(item.get("model_id") == "qbhk" for item in models):
+            models.insert(0, model)
 
     def _find_workbook(self):
         data_dir = Path(__file__).resolve().parent.parent / "data"

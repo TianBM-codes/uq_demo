@@ -226,6 +226,7 @@ class WorkbenchBlock(QGraphicsItem):
         return {
             "title": title,
             "param_name": self.data.get("model_name", self.data["title"]),
+            "model_id": self.data.get("model_id", ""),
             "var_type": "随机变量" if "不确定" in self.data.get("category", "") else "区间变量",
             "dist_type": "Normal" if "不确定" in self.data.get("category", "") else "Interval",
             "mean": "",
@@ -407,6 +408,7 @@ def models_to_payloads(models):
             {
                 "title": f"{scope} - {category} - {name}",
                 "param_name": name,
+                "model_id": model.get("model_id", ""),
                 "var_type": "随机变量" if "不确定" in category else "区间变量",
                 "dist_type": "Normal" if "不确定" in category else "Interval",
                 "mean": "",
@@ -845,6 +847,7 @@ class WorkflowCanvas(QWidget):
             "code": "M",
             "title": model.get("name", payload.get("name", "模型")),
             "model_name": model.get("name", payload.get("name", "模型")),
+            "model_id": model.get("model_id", payload.get("model_id", "")),
             "category": model.get("category", payload.get("name", "")),
             "inputs": model.get("inputs", ""),
             "outputs": model.get("outputs", ""),
@@ -894,6 +897,7 @@ class WorkflowCanvas(QWidget):
         return {
             "title": title,
             "param_name": name,
+            "model_id": payload.get("model_id", ""),
             "var_type": "随机变量" if "不确定" in category else "区间变量",
             "dist_type": "Normal" if "不确定" in category else "Interval",
             "mean": "",

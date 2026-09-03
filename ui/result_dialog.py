@@ -94,6 +94,39 @@ class ResultDialog(QDialog):
         self.activateWindow()
         return self
 
+    def show_qbhk_results(self, result, mode):
+        deterministic = result["deterministic"]
+        summary = deterministic["summary"]
+        convergence = deterministic["convergence"]
+        params = deterministic["parameters"]
+        statistics = result.get("statistics")
+
+        self.title_label.setText("设计阶段 - 曲柄滑块刚柔耦合动力学模型")
+        self.summary_label.setText(
+            f"运行模式：{mode}\n"
+            f"模型输入：E={params.E:.3g} Pa，F={params.F:.3g} N，d={params.d:.3g} m，"
+            f"omega={params.omega:.3g} rad/s，T={params.T:.3g} s，dt={params.dt:.3g} s，Ne={params.Ne}"
+        )
+        detail = (
+            f"确定性响应：max|x|={summary['max_abs_x']:.6g} m，"
+            f"max|v|={summary['max_abs_v']:.6g} m/s，"
+            f"max|a|={summary['max_abs_a']:.6g} m/s2；"
+            f"收敛：{'全部收敛' if convergence['all_converged'] else '存在未收敛步'}"
+        )
+        if statistics:
+            uq_summary = statistics["summary"]
+            detail += (
+                f"\nUQ统计：max|x|均值={uq_summary['max_abs_x_mean']:.6g}，"
+                f"标准差={uq_summary['max_abs_x_std']:.6g}；"
+                f"样本数={len(result.get('samples', []))}"
+            )
+        self.detail_label.setText(detail)
+        self.visualization_panel.show_qbhk_results(result)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        return self
+
     def refresh(self):
         if not self._state:
             return
